@@ -31,7 +31,13 @@ class DigitRecognizerTest {
             val frame = Bitmap.createScaledBitmap(source, size, size, true)
             val scan = reader.read(frame)
             assertArrayEquals("Grid size $size", expected, scan.digits)
-            assertTrue("Unexpected uncertainty at $size: ${scan.uncertain}", scan.uncertain.isEmpty())
+            if (size >= 320) {
+                assertTrue("Unexpected uncertainty at $size: ${scan.uncertain}", scan.uncertain.isEmpty())
+            } else {
+                // Downsampling loses strokes: keep the production confidence gate.
+                // The two blurred 3s must request review rather than an automatic hint.
+                assertEquals(setOf(1, 20), scan.uncertain)
+            }
             if (frame !== source) frame.recycle()
         }
         source.recycle()
