@@ -41,7 +41,25 @@ jobs:
       - name: Restore standard Gradle wrapper
         run: gradle wrapper --gradle-version 8.9 --distribution-type bin --no-daemon
       - name: Test, lint and build installable APK
-        run: bash ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon --stacktrace
+        run: bash ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon --stacktrace --continue
+      - name: Summarize verification results
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, os, xml.etree.ElementTree as ET
+          lines = ["## Android verification", "| Suite | Tests | Failures | Errors |", "|---|---:|---:|---:|"]
+          for path in sorted(glob.glob("app/build/test-results/testDebugUnitTest/TEST-*.xml")):
+              root = ET.parse(path).getroot()
+              lines.append(f"| {root.get('name')} | {root.get('tests')} | {root.get('failures')} | {root.get('errors')} |")
+              for case in root.findall('testcase'):
+                  for failure in case.findall('failure') + case.findall('error'):
+                      lines.append(f"\n{case.get('name')}: {failure.get('message')}\n")
+                      print(failure.text or '')
+          report = '\n'.join(lines)
+          print(report)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write(report + '\n')
+          PY
       - name: Verify APK signature and metadata
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk
