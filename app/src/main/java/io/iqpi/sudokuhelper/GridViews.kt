@@ -110,11 +110,17 @@ class SudokuBoardView(context: Context) : View(context) {
             canvas.drawLine(0f,i*cell,s,i*cell,paint)
         }
     }
+    override fun performClick(): Boolean {
+        super.performClick()
+        return true
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.action != MotionEvent.ACTION_UP) return true
         val cell=width.toFloat()/6
         val r=(event.y/cell).toInt().coerceIn(0,5)
         val c=(event.x/cell).toInt().coerceIn(0,5)
+        performClick()
         onCellTapped?.invoke(r*6+c)
         return true
     }

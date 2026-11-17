@@ -10,15 +10,17 @@ object SudokuSolver {
         if (killer) {
             val all = cages.flatMap { it.cells }
             if (all.size != 36 || all.toSet().size != 36 || all.any { it !in 0..35 } ||
-                cages.any { it.cells.isEmpty() || it.sum !in 1..21 || it.cells.size > 6 })
+                cages.any { it.cells.isEmpty() || it.cells.size > 6 ||
+                    it.sum !in (it.cells.size * (it.cells.size + 1) / 2)..((7 - it.cells.size)..6).sum() })
                 return Result(null, 0, "Для Killer задайте все группы и суммы")
         }
+        val activeCages = if (killer) cages else emptyList()
         val board = input.copyOf()
         for (i in 0..35) {
             val v = board[i]
             if (v == 0) continue
             board[i] = 0
-            if (!allowed(board, i, v, cages)) return Result(null, 0, "Противоречие: строка ${i / 6 + 1}, столбец ${i % 6 + 1}")
+            if (!allowed(board, i, v, activeCages)) return Result(null, 0, "Противоречие: строка ${i / 6 + 1}, столбец ${i % 6 + 1}")
             board[i] = v
         }
         var solutions = 0
@@ -30,7 +32,7 @@ object SudokuSolver {
             var smallest = 7
             for (i in 0..35) {
                 if (board[i] != 0) continue
-                val options = (1..6).filter { allowed(board, i, it, cages) }.toIntArray()
+                val options = (1..6).filter { allowed(board, i, it, activeCages) }.toIntArray()
                 if (options.isEmpty()) return
                 if (options.size < smallest) {
                     bestIndex = i

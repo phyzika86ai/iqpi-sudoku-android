@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
-import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -25,6 +24,8 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.content.ContextCompat
 import java.util.concurrent.Executors
 import kotlin.math.min
@@ -51,6 +52,8 @@ class MainActivity : ComponentActivity() {
     private var cameraReady = false
     private var scanning = true
     private var busy = false
+    private var foreground = false
+    private var scanGeneration = 0
     private var killer = false
     private var editingCage = false
     private val selectedCage = mutableSetOf<Int>()
@@ -67,7 +70,7 @@ class MainActivity : ComponentActivity() {
 
     private val captureTick = object : Runnable {
         override fun run() {
-            if (scanning && cameraReady && !busy && !editingCage) capturePreview()
+            if (foreground && scanning && cameraReady && !busy && !editingCage) capturePreview()
             mainHandler.postDelayed(this, 650L)
         }
     }
@@ -81,7 +84,20 @@ class MainActivity : ComponentActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
             startCamera()
         else permissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        foreground = true
         mainHandler.post(captureTick)
+    }
+
+    override fun onStop() {
+        foreground = false
+        scanGeneration++
+        lastRead = null
+        mainHandler.removeCallbacks(captureTick)
+        super.onStop()
     }
 
     override fun onDestroy() {
@@ -120,13 +136,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun makeScreen() {
-        val scroll = ScrollView(this).apply { fillViewport = true; setBackgroundColor(Color.rgb(7, 18, 30)) }
+        val scroll = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(Color.rgb(7, 18, 30)) }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(7), dp(12), dp(20))
         }
         scroll.addView(body)
         setContentView(scroll)
+        ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
 
         val title = makeText("IQPI • SUDOKU CAMERA 6×6", 19f, 0xFF33D8CB.toInt())
         title.setTypeface(null, android.graphics.Typeface.BOLD)
@@ -174,11 +195,17 @@ class MainActivity : ComponentActivity() {
         body.addView(boardView, LinearLayout.LayoutParams(-1, -2))
 
         cageButton = makeButton("Killer: добавить группу").apply { setOnClickListener { addOrFinishCage() } }
-        clearCagesButton = makeButton("Сбросить группы").apply { setOnClickListener { cages.clear(); selectedCage.clear(); editingCage = false; updateBoard(); updateHint() } }
+        clearCagesButton = makeButton("Сбросить группы").apply { setOnClickListener { cages.clear(); selectedCage.clear(); editingCage = false; cageButton.text = "Killer: добавить группу"; updateBoard(); updateHint() } }
         addRow(body, cageButton, clearCagesButton)
         val demo = makeButton("Проверить на примере со скриншота").apply {
             setOnClickListener {
+                scanGeneration++
                 scanning = false
+                boardView.uncertainty = emptySet()
+                selectedCage.clear()
+                cageButton.visibility = View.GONE
+                clearCagesButton.visibility = View.GONE
+                cageButton.text = "Killer: добавить группу"
                 scanButton.text = "Продолжить сканирование"
                 killer = false
                 modeButton.text = "Режим: классика"
@@ -227,12 +254,13 @@ class MainActivity : ComponentActivity() {
         catch (_: Exception) { shot.recycle(); return }
         shot.recycle()
         busy = true
+        val generation = scanGeneration
         worker.execute {
             try {
                 val result = recognizer.read(cropped)
-                runOnUiThread { if (scanning) applyScan(result) }
+                runOnUiThread { if (foreground && scanning && generation == scanGeneration) applyScan(result) }
             } catch (e: Exception) {
-                runOnUiThread { status.text = "Ошибка распознавания: ${e.message}" }
+                runOnUiThread { if (foreground && generation == scanGeneration) status.text = "Ошибка распознавания: ${e.message}" }
             } finally {
                 cropped.recycle()
                 runOnUiThread { busy = false }
@@ -241,18 +269,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyScan(scan: DigitRecognizer.Scan) {
-        if (scan.found < 8) {
-            hint = -1
-            cameraGuide.hintCell = -1
-            boardView.solution = null
-            boardView.hintCell = -1
-            boardView.invalidate()
+        if (scan.found == 0 && !killer) {
+            clearSolution("Подсказка: наведи камеру на поле")
             status.text = "Найдено ${scan.found} цифр. Приблизь поле и выровняй рамку."
             lastRead = null
             stableReadings = 0
             return
         }
         if (lastRead?.contentEquals(scan.digits) != true || lastUncertain != scan.uncertain) {
+            clearSolution("Проверяю новое поле...")
             lastRead = scan.digits.copyOf()
             lastUncertain = scan.uncertain.toSet()
             stableReadings = 1
@@ -278,10 +303,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toggleScan() {
+        scanGeneration++
         scanning = !scanning
         if (scanning) {
             editingCage = false
             selectedCage.clear()
+            cageButton.text = "Killer: добавить группу"
+            clearSolution("Подсказка: наведи камеру на поле")
             lastRead = null
             stableReadings = 0
             scanButton.text = "Пауза / правка"
@@ -294,12 +322,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun switchMode() {
+        scanGeneration++
+        lastRead = null
+        stableReadings = 0
         killer = !killer
         modeButton.text = if (killer) "Режим: Killer" else "Режим: классика"
         cageButton.visibility = if (killer) View.VISIBLE else View.GONE
         clearCagesButton.visibility = if (killer) View.VISIBLE else View.GONE
         editingCage = false
         selectedCage.clear()
+        cageButton.text = "Killer: добавить группу"
         updateBoard()
         updateHint()
     }
@@ -379,7 +411,21 @@ class MainActivity : ComponentActivity() {
         boardView.invalidate()
     }
 
+    private fun clearSolution(message: String) {
+        hint = -1
+        cameraGuide.hintCell = -1
+        boardView.hintCell = -1
+        boardView.solution = null
+        answer.text = message
+        boardView.invalidate()
+    }
+
     private fun updateHint() {
+        if (boardView.uncertainty.isNotEmpty()) {
+            clearSolution("Нужна проверка цифр")
+            status.text = "Исправь все неуверенные клетки: ${boardView.uncertainty.size}"
+            return
+        }
         val result = SudokuSolver.solve(currentBoard, killer, cages)
         hint = -1
         boardView.solution = if (result.solutionCount == 1) result.solution?.copyOf() else null
